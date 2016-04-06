@@ -1,18 +1,15 @@
 import sys
 import getopt
 import os
-import math
 import string
+import math
 import pickle
 import xml.etree.ElementTree as ET
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.stem.porter import *
 
 
-# Takes in a path string and outputs a list of file names in the directory
-def get_doc_names(path):
-    doc_names = os.listdir(path)
-    return doc_names
+stemmer = PorterStemmer()
 
 
 def write_dictionary(dictionary, dictionary_file):
@@ -20,25 +17,25 @@ def write_dictionary(dictionary, dictionary_file):
 
 
 def write_postings(main_dict, postings_lists, postings_file):
-    for dictionary in main_dict.itervalues():
-        for term, values in dictionary.iteritems():
+    for dictionary in main_dict.itervalues(): # dictionary is either title_dict or abstract_dict
+        for term, lst in dictionary.iteritems():
             file_pointer = postings_file.tell()
-            df = values[0]
-            idf = values[1]
-            term_pointer = values[2]
+            df = lst[0]
+            idf = lst[1]
+            term_pointer = lst[2]
             postings_list = postings_lists[term_pointer]
             for posting in postings_list:
-                postings_file.write(convert_filename(posting[0]) + " ")
-                postings_file.write(convert_to_bytes(posting[1]) + " ")
-            dictionary[term] = (df, idf, file_pointer)
+                postings_file.write(convert_doc_name(posting[0]) + " ")
+                postings_file.write(convert_to_bits(posting[1]) + " ")
+            dictionary[term] = [df, idf, file_pointer]
     return main_dict
 
 
-def convert_filename(filename):
-    return filename.ljust(15)
+def convert_doc_name(doc_name):
+    return doc_name.ljust(15)
 
 
-def convert_to_bytes(num):
+def convert_to_bits(num):
     return '{0:014b}'.format(int(num))
 
 
@@ -53,7 +50,6 @@ def is_valid_token(word):
                 return False
             elif char in string.punctuation:
                 return False
-
     return True
 
 
@@ -65,8 +61,9 @@ def build_index(input_doc_path, output_file_d, output_file_p):
     abstract_dict = {}
     main_dict = {"TITLE": title_dict, "ABSTRACT": abstract_dict}
 
-    postings_lists = {}
     doc_norm_factors = {}
+
+    postings_lists = {}
 
     doc_names = get_doc_names(input_doc_path)
     for doc_name in doc_names:
@@ -80,37 +77,44 @@ def build_index(input_doc_path, output_file_d, output_file_p):
                 text = child.text
                 if type(child.text) is unicode:
                     text = child.text.encode('ascii', errors = 'ignore')
-                doc_dict = get_doc_dict(text)
 
+                doc_dict = get_doc_dict(text)
                 for term, term_freq in doc_dict.iteritems():
                     doc_wt = 1 + math.log10(term_freq)
                     doc_norm_factor += math.pow(doc_wt, 2)
-                    if term not in main_dict[name]:
+                    dictionary = main_dict[name] # dictionary is either title_dict or abstract_dict
+                    if term not in dictionary:
                         term_pointer = len(postings_lists)
-                        main_dict[name][term] = (1, 0, term_pointer)
+                        dictionary[term] = [1, 0, term_pointer]
                         postings_lists[term_pointer] = [(doc_name, term_freq)]
                     else:
-                        df = main_dict[name][term][0]
-                        term_pointer = main_dict[name][term][2]
-                        main_dict[name][term] = (df + 1, 0, term_pointer)
+                        df = dictionary[term][0]
+                        term_pointer = dictionary[term][2]
+                        dictionary[term] = [df + 1, 0, term_pointer]
                         postings_lists[term_pointer].append((doc_name, term_freq))
 
         doc_norm_factors[doc_name] = math.pow(doc_norm_factor, 0.5)
-    main_dict = compute_idf(main_dict, len(doc_names))
+
+    main_dict = compute_idf(main_dict, len(doc_names))    
     main_dict = write_postings(main_dict, postings_lists, postings_file)
     main_dict["DOCUMENT_NORM_FACTORS"] = doc_norm_factors
+
+    print doc_norm_factors
+
     write_dictionary(main_dict, dictionary_file)
+    
     dictionary_file.close()
     postings_file.close()
 
 
-def get_doc_dict(text):
-    stemmer = PorterStemmer()
+def get_doc_names(path):
+    return os.listdir(path)
 
+
+def get_doc_dict(text):
     doc_dict = {}
     for word in filter(lambda x: is_valid_token(x), word_tokenize(text)):
         token = stemmer.stem(word).lower()
-        # updating of term frequency
         if token in doc_dict:
             doc_dict[token] += 1
         else:
@@ -119,12 +123,13 @@ def get_doc_dict(text):
 
 
 def compute_idf(main_dict, N):
+    N = float(N)
     for dictionary in main_dict.itervalues():
-        for term, value in dictionary.iteritems():
-            df = value[0]
-            idf = math.log10(N // df)
-            term_ptr = value[2]
-            dictionary[term] = (df, idf, term_ptr)
+        for term, lst in dictionary.iteritems():
+            df = lst[0]
+            idf = math.log10(N / df)
+            term_ptr = lst[2]
+            dictionary[term] = [df, idf, term_ptr]
     return main_dict
 
 

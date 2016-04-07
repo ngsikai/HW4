@@ -12,47 +12,6 @@ from nltk.stem.porter import *
 stemmer = PorterStemmer()
 
 
-def write_dictionary(dictionary, dictionary_file):
-    pickle.dump(dictionary, dictionary_file)
-
-
-def write_postings(main_dict, postings_lists, postings_file):
-    for dictionary in main_dict.itervalues(): # dictionary is either title_dict or abstract_dict
-        for term, lst in dictionary.iteritems():
-            file_pointer = postings_file.tell()
-            df = lst[0]
-            idf = lst[1]
-            term_pointer = lst[2]
-            postings_list = postings_lists[term_pointer]
-            for posting in postings_list:
-                postings_file.write(convert_doc_name(posting[0]) + " ")
-                postings_file.write(convert_to_bits(posting[1]) + " ")
-            dictionary[term] = [df, idf, file_pointer]
-    return main_dict
-
-
-def convert_doc_name(doc_name):
-    return doc_name.ljust(19)
-
-
-def convert_to_bits(num):
-    return '{0:014b}'.format(int(num))
-
-
-def is_valid_token(word):
-    if word in string.digits:
-        return False
-    elif word in string.punctuation:
-        return False
-    else:
-        for char in list(word):
-            if char in string.digits:
-                return False
-            elif char in string.punctuation:
-                return False
-    return True
-
-
 def build_index(input_doc_path, output_file_d, output_file_p):
     dictionary_file = open(output_file_d, 'wb')
     postings_file = open(output_file_p, 'w')
@@ -60,14 +19,13 @@ def build_index(input_doc_path, output_file_d, output_file_p):
     title_dict = {}
     abstract_dict = {}
     main_dict = {"TITLE": title_dict, "ABSTRACT": abstract_dict}
-
     doc_norm_factors = {}
-
     postings_lists = {}
 
     doc_names = get_doc_names(input_doc_path)
     for doc_name in doc_names:
         path = input_doc_path + '/' + doc_name
+        doc_name = remove_ext(doc_name)
         tree = ET.parse(path)
         root = tree.getroot()
         doc_norm_factor = 0
@@ -88,7 +46,6 @@ def build_index(input_doc_path, output_file_d, output_file_p):
                         term_pointer = dictionary[term][2]
                         dictionary[term] = [df + 1, 0, term_pointer]
                         postings_lists[term_pointer].append((doc_name, term_freq))
-
         doc_norm_factors[doc_name] = math.pow(doc_norm_factor, 0.5)
 
     main_dict = compute_idf(main_dict, len(doc_names))
@@ -100,23 +57,6 @@ def build_index(input_doc_path, output_file_d, output_file_p):
     postings_file.close()
 
 
-def get_doc_names(path):
-    return os.listdir(path)
-
-
-def get_doc_dict(text):
-    if type(text) is unicode:
-        text = text.encode('ascii', errors = 'ignore')
-    doc_dict = {}
-    for word in filter(lambda x: is_valid_token(x), word_tokenize(text)):
-        token = stemmer.stem(word).lower()
-        if token in doc_dict:
-            doc_dict[token] += 1
-        else:
-            doc_dict[token] = 1
-    return doc_dict
-
-
 def compute_idf(main_dict, N):
     N = float(N)
     for dictionary in main_dict.itervalues():
@@ -126,6 +66,72 @@ def compute_idf(main_dict, N):
             term_ptr = lst[2]
             dictionary[term] = [df, idf, term_ptr]
     return main_dict
+
+
+def write_dictionary(dictionary, dictionary_file):
+    pickle.dump(dictionary, dictionary_file)
+
+
+def write_postings(main_dict, postings_lists, postings_file):
+    for dictionary in main_dict.itervalues(): # dictionary is either title_dict or abstract_dict
+        for term, lst in dictionary.iteritems():
+            # update term's pointer to point to its postings list in postings.txt
+            file_pointer = postings_file.tell()
+            df = lst[0]
+            idf = lst[1]
+            dictionary[term] = [df, idf, file_pointer]
+            # write term's postings list to postings.txt
+            term_pointer = lst[2]
+            postings_list = postings_lists[term_pointer]
+            for posting in postings_list:
+                doc_name = posting[0]
+                tf = posting[1]
+                postings_file.write(pad_doc_name(doc_name) + " ")
+                postings_file.write(pad_tf(tf) + " ")
+    return main_dict
+
+
+def remove_ext(doc_name):
+    return doc_name[:len(doc_name) - 4]
+
+
+def pad_doc_name(doc_name):
+    return doc_name.ljust(15) # pad whitespaces until 11 characters
+
+
+def pad_tf(num):
+    return str(num).ljust(5) # pad whitespaces until 5 characters
+
+
+def is_valid_token(word):
+    if word in string.digits:
+        return False
+    elif word in string.punctuation:
+        return False
+    else:
+        for char in list(word):
+            if char in string.digits:
+                return False
+            elif char in string.punctuation:
+                return False
+    return True
+
+
+def get_doc_names(path):
+    return os.listdir(path)
+
+
+def get_doc_dict(text):
+    if type(text) is unicode:
+        text = text.encode('ascii', errors = 'ignore')
+    doc_dict = {}
+    for word in filter(lambda word: is_valid_token(word), word_tokenize(text)):
+        token = stemmer.stem(word).lower()
+        if token in doc_dict:
+            doc_dict[token] += 1
+        else:
+            doc_dict[token] = 1
+    return doc_dict
 
 
 def usage():

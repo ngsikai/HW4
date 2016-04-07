@@ -32,7 +32,7 @@ def write_postings(main_dict, postings_lists, postings_file):
 
 
 def convert_doc_name(doc_name):
-    return doc_name.ljust(15)
+    return doc_name.ljust(19)
 
 
 def convert_to_bits(num):
@@ -74,11 +74,7 @@ def build_index(input_doc_path, output_file_d, output_file_p):
         for child in root:
             name = child.attrib['name'].upper()
             if name == "TITLE" or name == "ABSTRACT":
-                text = child.text
-                if type(child.text) is unicode:
-                    text = child.text.encode('ascii', errors = 'ignore')
-
-                doc_dict = get_doc_dict(text)
+                doc_dict = get_doc_dict(child.text)
                 for term, term_freq in doc_dict.iteritems():
                     doc_wt = 1 + math.log10(term_freq)
                     doc_norm_factor += math.pow(doc_wt, 2)
@@ -95,14 +91,11 @@ def build_index(input_doc_path, output_file_d, output_file_p):
 
         doc_norm_factors[doc_name] = math.pow(doc_norm_factor, 0.5)
 
-    main_dict = compute_idf(main_dict, len(doc_names))    
+    main_dict = compute_idf(main_dict, len(doc_names))
     main_dict = write_postings(main_dict, postings_lists, postings_file)
     main_dict["DOCUMENT_NORM_FACTORS"] = doc_norm_factors
-
-    print doc_norm_factors
-
     write_dictionary(main_dict, dictionary_file)
-    
+
     dictionary_file.close()
     postings_file.close()
 
@@ -112,6 +105,8 @@ def get_doc_names(path):
 
 
 def get_doc_dict(text):
+    if type(text) is unicode:
+        text = text.encode('ascii', errors = 'ignore')
     doc_dict = {}
     for word in filter(lambda x: is_valid_token(x), word_tokenize(text)):
         token = stemmer.stem(word).lower()

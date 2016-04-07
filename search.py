@@ -2,76 +2,117 @@ from __future__ import division
 import sys
 import getopt
 import os
+import string
 import math
 import pickle
 import operator
+import xml.etree.ElementTree as ET
 from operator import itemgetter
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.stem.porter import *
 
 K = 10
-bits_per_posting = 30
+bits_per_posting = 35
+stemmer = PorterStemmer()
 
 
 # For each line in query file, performs query and outputs result
 def search_index(dictionary_file, postings_file, queries_file, output_file):
     dictionary = pickle.load(open(dictionary_file, 'rb'))
     postings_lists = open(postings_file, 'r')
-    queries_list = open(queries_file, 'r').read().split("\n")
     search_results = open(output_file, 'w')
 
-    for index, query in enumerate(queries_list):
-        # in case blank line is caught as a query, write an empty line
-        if query == "":
-            search_results.write("\n")
-        else:
-            scores_dict = get_scores_dict(query, dictionary, postings_lists)
-            top_results = get_top_results(scores_dict)
-            search_results.write(stringify(top_results))
-            if index != len(queries_list) - 1:
-                search_results.write("\n")
-
+    query_title_dict = {}
+    query_desc_dict = {}
+    query_dict = {"TITLE": query_title_dict, "DESCRIPTION": query_desc_dict}
+    tree = ET.parse(queries_file)
+    root = tree.getroot()
+    for child in root:
+        name = child.tag.upper()
+        if name == "TITLE" or name == "DESCRIPTION":
+            query_dict[name] = get_query_dict(child.text)
+    scores_dict = get_scores_dict(dictionary, postings_lists, query_dict)
+    final_scores = sort_scores(scores_dict)
+    search_results.write(stringify(final_scores))
     postings_lists.close()
     search_results.close()
 
 
-def get_top_results(scores_dict):
-    tuples_list = [(doc_id, score) for doc_id, score in scores_dict.items()]
-    tuples_list.sort(key = operator.itemgetter(0))
-    tuples_list.sort(key = operator.itemgetter(1), reverse = True)
-    return tuples_list[:K]
+def get_query_dict(text):
+    if type(text) is unicode:
+        text = text.encode('ascii', errors='ignore')
+    query_dict = {}
+    for word in filter(lambda x: is_valid_token(x), word_tokenize(text)):
+        token = stemmer.stem(word).lower()
+        if token in query_dict:
+            query_dict[token] += 1
+        else:
+            query_dict[token] = 1
+    return query_dict
 
-def get_scores_dict(query_str, dictionary, postings_lists):
-    doc_count = dictionary["DOCUMENT_COUNT"]
-    doc_norm_factors = dictionary["DOCUMENT_NORM_FACTORS"]
+
+def get_scores_dict(main_dict, postings_lists, query_dict):
     scores_dict = {}
-    # query_norm_factor is used to compute final normalising values
     query_norm_factor = 0
-    query_dict = process_query(query_str)
-    for term in query_dict:
-        if term in dictionary:
-            # query computations
-            df = dictionary[term][0]
-            idf = math.log10(doc_count / df)
-            query_tf = query_dict[term]
-            query_tf_wt = 1 + math.log10(query_tf)
-            query_wt = idf * query_tf_wt
-            query_norm_factor += math.pow(query_wt, 2)
-            # retrieving postings list for term
-            term_pointer = dictionary[term][1]
-            postings_list = get_postings_list(df, term_pointer, postings_lists)
-            # document computations
-            for posting in postings_list:
-                doc_id = posting[0]
-                doc_tf = posting[1]
-                doc_wt = 1 + math.log10(doc_tf)
-                score = query_wt * doc_wt
-                if doc_id in scores_dict:
-                    scores_dict[doc_id] += score
-                else:
-                    scores_dict[doc_id] = score
+    wt = 0
+    for dict_name, dictionary in query_dict.iteritems():
+
+        if dict_name == "TITLE":
+            wt = 2
+        elif dict_name == "DESCRIPTION":
+            wt = 1
+
+        for term, term_freq in dictionary.iteritems():
+            query_norm_factor += update_scores_dict(postings_lists, scores_dict, term, term_freq, main_dict["TITLE"], wt*2)
+            query_norm_factor += update_scores_dict(postings_lists, scores_dict, term, term_freq, main_dict["ABSTRACT"], wt)
+
     query_norm_factor = math.pow(query_norm_factor, 0.5)
+    doc_norm_factors = main_dict["DOCUMENT_NORM_FACTORS"]
     return normalise(scores_dict, query_norm_factor, doc_norm_factors)
+
+
+def update_scores_dict(postings_lists, scores_dict, query_term, query_tf, dictionary, wt):
+    if query_term in dictionary:
+        query_tf_wt = 1 + math.log10(query_tf)
+        idf = dictionary[query_term][1]
+        query_wt = query_tf_wt * idf
+
+        df = dictionary[query_term][0]
+        ptr = dictionary[query_term][2]
+        postings_list = get_postings_list(df, ptr, postings_lists)
+        for posting in postings_list:
+            doc_name = posting[0]
+            doc_wt = posting[1]
+            score = query_wt * doc_wt
+            if doc_name in scores_dict:
+                scores_dict[doc_name] += score * wt
+            else:
+                scores_dict[doc_name] = score * wt
+
+        return query_tf_wt ** 2
+    else:
+        return 0
+
+
+def is_valid_token(word):
+    if word in string.digits:
+        return False
+    elif word in string.punctuation:
+        return False
+    else:
+        for char in list(word):
+            if char in string.digits:
+                return False
+            elif char in string.punctuation:
+                return False
+    return True
+
+
+def sort_scores(scores_dict):
+    tuples_list = [(doc_id, score) for doc_id, score in scores_dict.items()]
+    tuples_list.sort(key=operator.itemgetter(0))
+    tuples_list.sort(key=operator.itemgetter(1), reverse=True)
+    return tuples_list
 
 
 # Normalises scores dictionary
@@ -82,28 +123,13 @@ def normalise(scores_dict, query_norm_factor, doc_norm_factors):
     return scores_dict
 
 
-# Converts query string into dictionary form
-def process_query(query_str):
-    stemmer = PorterStemmer()
-    query_list = query_str.split(" ")
-    query_dict = {}
-    for query in query_list:
-        query = stemmer.stem(query).lower()
-        if query in query_dict:
-            query_dict[query] += 1
-        else:
-            query_dict[query] = 1
-    return query_dict
-
-
 # Seeks, loads and returns a postings list
 def get_postings_list(df, term_pointer, postings_lists):
     postings_lists.seek(term_pointer)
     results_list = postings_lists.read(df * bits_per_posting - 1).strip().split()
-    results_list = map((lambda x: int(x, 2)), results_list)
     tuples_list = []
     for i in range(0, len(results_list), 2):
-        tuples_list.append((results_list[i], results_list[i + 1]))
+        tuples_list.append((results_list[i].strip(), int(results_list[i + 1], 2)))
     return tuples_list
 
 

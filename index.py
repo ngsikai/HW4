@@ -19,6 +19,9 @@ def build_index(input_doc_path, output_file_d, output_file_p):
     title_dict = {}
     abstract_dict = {}
     main_dict = {"TITLE": title_dict, "ABSTRACT": abstract_dict}
+    title_doc_dict = {}
+    abstract_doc_dict = {}
+    main_doc_dict = {"TITLE": title_doc_dict, "ABSTRACT": abstract_doc_dict}
     doc_norm_factors = {}
     postings_lists = {}
 
@@ -33,6 +36,7 @@ def build_index(input_doc_path, output_file_d, output_file_p):
             name = child.attrib['name'].upper()
             if name == "TITLE" or name == "ABSTRACT":
                 doc_dict = get_doc_dict(child.text)
+                main_doc_dict[name][doc_name] = doc_dict
                 for term, term_freq in doc_dict.iteritems():
                     doc_wt = 1 + math.log10(term_freq)
                     doc_norm_factor += math.pow(doc_wt, 2)
@@ -50,7 +54,9 @@ def build_index(input_doc_path, output_file_d, output_file_p):
 
     main_dict = compute_idf(main_dict, len(doc_names))
     main_dict = write_postings(main_dict, postings_lists, postings_file)
+    main_doc_dict = write_doc_dict(main_doc_dict, postings_lists, postings_file)
     main_dict["DOCUMENT_NORM_FACTORS"] = doc_norm_factors
+    main_dict["MAIN_DOC_DICT"] = main_doc_dict
     write_dictionary(main_dict, dictionary_file)
 
     dictionary_file.close()
@@ -90,6 +96,16 @@ def write_postings(main_dict, postings_lists, postings_file):
                 postings_file.write(pad_tf(tf) + " ")
     return main_dict
 
+
+def write_doc_dict(main_doc_dict, postings_lists, postings_file):
+    for dictionary in main_doc_dict.itervalues(): # dictionary is either title_doc_dict or abstract_doc_dict
+        for doc_name, doc_dict in dictionary.iteritems():
+            file_pointer = postings_file.tell()
+            postings_file.write(str(doc_dict))
+            offset = postings_file.tell() - file_pointer
+            dictionary[doc_name] = [file_pointer, offset]
+    print main_doc_dict
+    return main_doc_dict
 
 def remove_ext(doc_name):
     return doc_name[:len(doc_name) - 4]

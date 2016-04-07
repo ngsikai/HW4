@@ -14,10 +14,14 @@ from nltk.stem.porter import *
 
 bits_per_posting = 22
 stemmer = PorterStemmer()
+relevant_docs_count = 15
+alpha = 2
+beta = 2.5
+gamma = -0.5
 
 
 def search_index(dictionary_file, postings_file, queries_file, output_file):
-    dictionary = pickle.load(open(dictionary_file, 'rb'))
+    main_dict = pickle.load(open(dictionary_file, 'rb'))
     postings_lists = open(postings_file, 'r')
     search_results = open(output_file, 'w')
 
@@ -32,8 +36,25 @@ def search_index(dictionary_file, postings_file, queries_file, output_file):
         if name == "TITLE" or name == "DESCRIPTION":
             query_dict[name] = get_query_dict(child.text)
 
-    scores_dict = get_scores_dict(dictionary, postings_lists, query_dict)
-    final_scores = sort_scores(scores_dict)
+    # Score with initial query
+    scores_dict = get_scores_dict(main_dict, postings_lists, query_dict)
+    initial_scores = sort_scores(scores_dict)
+    relevant_docs = map(lambda x: x[0], initial_scores[:relevant_docs_count])
+
+    # print query_dict
+    # print "\n\n\n"
+
+    # Query Expansion with Rocchio Algorithm
+    main_doc_dict = main_dict["MAIN_DOC_DICT"]
+    query_dict = expand_query(query_dict, main_doc_dict, relevant_docs, postings_lists)
+
+    # print query_dict
+
+    # Score with expanded query
+    expanded_scores_dict = get_scores_dict(main_dict, postings_lists, query_dict)
+
+    final_scores = sort_scores(expanded_scores_dict)
+
     search_results.write(stringify(final_scores))
 
     postings_lists.close()
@@ -74,7 +95,7 @@ def get_scores_dict(main_dict, postings_lists, query_dict):
 
 
 def update_scores_dict(postings_lists, scores_dict, query_term, query_tf, dictionary, wt):
-    if query_term in dictionary:
+    if query_term in dictionary and query_tf >= 0:
         query_tf_wt = 1 + math.log10(query_tf)
         idf = dictionary[query_term][1]
         query_wt = query_tf_wt * idf
@@ -95,6 +116,68 @@ def update_scores_dict(postings_lists, scores_dict, query_term, query_tf, dictio
         return query_tf_wt ** 2
     else:
         return 0
+
+
+def expand_query(query_dict, main_doc_dict, relevant_docs, postings_lists):
+    all_docs = main_doc_dict["TITLE"].keys()
+    irrelevant_docs = get_irrelevant_docs(all_docs, relevant_docs)
+    relevant_vector = get_vector(relevant_docs, main_doc_dict, postings_lists)
+    irrelevant_vector = get_vector(irrelevant_docs, main_doc_dict, postings_lists)
+
+    query_dict = multiply_vector_dict(query_dict, alpha)
+    relevant_vector = multiply_vector_dict(relevant_vector, beta)
+    irrelevant_vector = multiply_vector_dict(irrelevant_vector, gamma)
+
+    return add_three_vectors(query_dict, relevant_vector, irrelevant_vector)
+
+
+def multiply_vector_dict(vector_dict, multiple):
+    for dictionary in vector_dict.itervalues():
+        for term, tf in dictionary.iteritems():
+            dictionary[term] = tf / multiple
+    return vector_dict
+
+
+def get_vector(docs, main_doc_dict, postings_lists):
+    title_vector_dict = {}
+    abstract_vector_dict = {}
+    vector_dict = {"TITLE": title_vector_dict, "ABSTRACT": abstract_vector_dict}
+    
+    for doc in docs:
+        for dict_name, dictionary in main_doc_dict.iteritems():
+            if doc in dictionary:
+                ptr = dictionary[doc][0]
+                offset = dictionary[doc][1]
+                doc_dict = eval(get_doc_dict(ptr, offset, postings_lists))
+                vector_dict[dict_name] = add_vector_dict(vector_dict[dict_name], doc_dict)
+
+    N = len(docs)
+    return multiply_vector_dict(vector_dict, 1/N)
+
+
+def add_three_vectors(query_dict, relevant_vector, irrelevant_vector):
+    query_dict["TITLE"] = add_vector_dict(query_dict["TITLE"], relevant_vector["TITLE"])
+    query_dict["TITLE"] = add_vector_dict(query_dict["TITLE"], irrelevant_vector["TITLE"])
+
+    query_dict["DESCRIPTION"] = add_vector_dict(query_dict["DESCRIPTION"], relevant_vector["ABSTRACT"])
+    query_dict["DESCRIPTION"] = add_vector_dict(query_dict["DESCRIPTION"], irrelevant_vector["ABSTRACT"])
+    return query_dict
+
+
+def add_vector_dict(vector_dict, doc_dict):
+    for term, tf in doc_dict.iteritems():
+        if term in vector_dict:
+            vector_dict[term] = vector_dict[term] + tf
+        else:
+            vector_dict[term] = tf
+    return vector_dict
+
+
+def get_irrelevant_docs(all_docs, relevant_docs):
+    print len(all_docs)
+    print len(relevant_docs)
+    print len(list(set(all_docs) - set(relevant_docs)))
+    return list(set(all_docs) - set(relevant_docs))
 
 
 def sort_scores(scores_dict):
@@ -120,6 +203,11 @@ def get_postings_list(df, term_pointer, postings_lists):
         tf = int(results_list[i + 1].strip())
         tuples_list.append((doc_name, tf))
     return tuples_list
+
+
+def get_doc_dict(ptr, offset, postings_lists):
+    postings_lists.seek(ptr)
+    return postings_lists.read(offset)
 
 
 def is_valid_token(word):

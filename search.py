@@ -10,14 +10,16 @@ import xml.etree.ElementTree as ET
 from operator import itemgetter
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.stem.porter import *
+from nltk.corpus import stopwords
 
 
 bits_per_posting = 22
 stemmer = PorterStemmer()
-relevant_docs_count = 15
-alpha = 2
-beta = 2.5
-gamma = -0.5
+relevant_docs_count = 10
+alpha = 1.0
+beta = 1.0
+gamma = -3.0
+stopwords = map(lambda word: stemmer.stem(word).lower(), stopwords.words('english'))
 
 
 def search_index(dictionary_file, postings_file, queries_file, output_file):
@@ -41,14 +43,9 @@ def search_index(dictionary_file, postings_file, queries_file, output_file):
     initial_scores = sort_scores(scores_dict)
     relevant_docs = map(lambda x: x[0], initial_scores[:relevant_docs_count])
 
-    # print query_dict
-    # print "\n\n\n"
-
     # Query Expansion with Rocchio Algorithm
     main_doc_dict = main_dict["MAIN_DOC_DICT"]
     query_dict = expand_query(query_dict, main_doc_dict, relevant_docs, postings_lists)
-
-    # print query_dict
 
     # Score with expanded query
     expanded_scores_dict = get_scores_dict(main_dict, postings_lists, query_dict)
@@ -134,7 +131,7 @@ def expand_query(query_dict, main_doc_dict, relevant_docs, postings_lists):
 def multiply_vector_dict(vector_dict, multiple):
     for dictionary in vector_dict.itervalues():
         for term, tf in dictionary.iteritems():
-            dictionary[term] = tf / multiple
+            dictionary[term] = tf * multiple
     return vector_dict
 
 
@@ -174,9 +171,6 @@ def add_vector_dict(vector_dict, doc_dict):
 
 
 def get_irrelevant_docs(all_docs, relevant_docs):
-    print len(all_docs)
-    print len(relevant_docs)
-    print len(list(set(all_docs) - set(relevant_docs)))
     return list(set(all_docs) - set(relevant_docs))
 
 
@@ -211,7 +205,9 @@ def get_doc_dict(ptr, offset, postings_lists):
 
 
 def is_valid_token(word):
-    if word in string.digits:
+    if word in stopwords:
+        return False
+    elif word in string.digits:
         return False
     elif word in string.punctuation:
         return False

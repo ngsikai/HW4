@@ -7,9 +7,11 @@ import pickle
 import xml.etree.ElementTree as ET
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.stem.porter import *
+from nltk.corpus import stopwords
 
 
 stemmer = PorterStemmer()
+stopwords = map(lambda word: stemmer.stem(word).lower(), stopwords.words('english'))
 
 
 def build_index(input_doc_path, output_file_d, output_file_p):
@@ -104,7 +106,6 @@ def write_doc_dict(main_doc_dict, postings_lists, postings_file):
             postings_file.write(str(doc_dict))
             offset = postings_file.tell() - file_pointer
             dictionary[doc_name] = [file_pointer, offset]
-    print main_doc_dict
     return main_doc_dict
 
 def remove_ext(doc_name):
@@ -120,7 +121,9 @@ def pad_tf(num):
 
 
 def is_valid_token(word):
-    if word in string.digits:
+    if word in stopwords:
+        return False
+    elif word in string.digits:
         return False
     elif word in string.punctuation:
         return False

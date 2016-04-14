@@ -14,25 +14,35 @@ from nltk.corpus import stopwords
 
 
 bits_per_posting = 22
-stemmer = PorterStemmer()
 relevant_docs_count = 10
 alpha = 1.0
 beta = 1.0
 gamma = -3.0
+stemmer = PorterStemmer()
 stopwords = map(lambda word: stemmer.stem(word).lower(), stopwords.words('english'))
 
 
+'''
+Retrieves Title and Desc of the query file and
+puts it through preliminary scoring to select top relevant_docs_count documents.
+
+Then, expand the initial query using the selected documents using the Rocchio Algorithm and
+puts it through a final round of scoring.
+'''
 def search_index(dictionary_file, postings_file, queries_file, output_file):
     main_dict = pickle.load(open(dictionary_file, 'rb'))
     postings_lists = open(postings_file, 'r')
     search_results = open(output_file, 'w')
 
+    # Title and Desc dict contains term -> tf mapping
     query_title_dict = {}
     query_desc_dict = {}
     query_dict = {"TITLE": query_title_dict, "DESCRIPTION": query_desc_dict}
 
+    # Takes in query file, parses it with xml etree library and gets its root
     tree = ET.parse(queries_file)
     root = tree.getroot()
+
     for child in root:
         name = child.tag.upper()
         if name == "TITLE" or name == "DESCRIPTION":
@@ -49,15 +59,18 @@ def search_index(dictionary_file, postings_file, queries_file, output_file):
 
     # Score with expanded query
     expanded_scores_dict = get_scores_dict(main_dict, postings_lists, query_dict)
-
     final_scores = sort_scores(expanded_scores_dict)
 
+    # Write to search_results
     search_results.write(stringify(final_scores))
 
     postings_lists.close()
     search_results.close()
 
 
+'''
+Takes in query and outputs dictionary with term -> tf mapping
+'''
 def get_query_dict(text):
     if type(text) is unicode:
         text = text.encode('ascii', errors='ignore')
@@ -71,6 +84,16 @@ def get_query_dict(text):
     return query_dict
 
 
+'''
+Returns dictionary of doc_id -> score mapping.
+Documents are scored accordingly if their title or abstract contains any of the query terms.
+
+There are four mappings possible:
+term in both query title and document title => 2 x 2 (highest weightage)
+term in query title and document abstract => 2 x 1 
+term in query description and document title => 1 x 2
+term in both query description and document abstract => 1 x 1 (lowest weightage)
+'''
 def get_scores_dict(main_dict, postings_lists, query_dict):
     scores_dict = {}
     query_norm_factor = 0
@@ -82,24 +105,32 @@ def get_scores_dict(main_dict, postings_lists, query_dict):
         elif dict_name == "DESCRIPTION":
             wt = 1
 
-        for term, term_freq in dictionary.iteritems():
-            query_norm_factor += update_scores_dict(postings_lists, scores_dict, term, term_freq, main_dict["TITLE"], wt*2)
-            query_norm_factor += update_scores_dict(postings_lists, scores_dict, term, term_freq, main_dict["ABSTRACT"], wt)
+        for term, tf in dictionary.iteritems():
+            query_norm_factor += update_scores_dict(postings_lists, scores_dict, term, tf, main_dict["TITLE"], wt*2)
+            query_norm_factor += update_scores_dict(postings_lists, scores_dict, term, tf, main_dict["ABSTRACT"], wt)
+    
     query_norm_factor = math.pow(query_norm_factor, 0.5)
 
     doc_norm_factors = main_dict["DOCUMENT_NORM_FACTORS"]
     return normalise(scores_dict, query_norm_factor, doc_norm_factors)
 
 
+'''
+Computes document scores for a given query_term using lnc.ltc and updates it in the given scores_dict
+Returns weight^2 of the given query_term for normalization
+'''
 def update_scores_dict(postings_lists, scores_dict, query_term, query_tf, dictionary, wt):
     if query_term in dictionary and query_tf >= 0:
+        # Calculates query_wt
         query_tf_wt = 1 + math.log10(query_tf)
         idf = dictionary[query_term][1]
         query_wt = query_tf_wt * idf
 
+        # Retrieves postings list of query_term
         df = dictionary[query_term][0]
         ptr = dictionary[query_term][2]
         postings_list = get_postings_list(df, ptr, postings_lists)
+
         for posting in postings_list:
             doc_name = posting[0]
             doc_tf = posting[1]
@@ -110,11 +141,14 @@ def update_scores_dict(postings_lists, scores_dict, query_term, query_tf, dictio
             else:
                 scores_dict[doc_name] = score * wt
 
-        return query_tf_wt ** 2
+        return query_wt ** 2
     else:
         return 0
 
 
+'''
+Expands query using Rocchio Algorithm with the given set of relevant documents
+'''
 def expand_query(query_dict, main_doc_dict, relevant_docs, postings_lists):
     all_docs = main_doc_dict["TITLE"].keys()
     irrelevant_docs = get_irrelevant_docs(all_docs, relevant_docs)
@@ -135,6 +169,10 @@ def multiply_vector_dict(vector_dict, multiple):
     return vector_dict
 
 
+'''
+Given a set of docs, returns a dictionary of term -> tf mapping for the entire set of docs
+This dictionary is a vector representation of the set of docs
+'''
 def get_vector(docs, main_doc_dict, postings_lists):
     title_vector_dict = {}
     abstract_vector_dict = {}
